@@ -36,7 +36,7 @@ def read_pgm(filename, byteorder='>'):
                             offset=len(header)
                             ).reshape((int(height), int(width)))
 
-def read_raw(filename):
+def read_raw(filename, interpolate=True):
     """ Read in a raw image file by using dcraw to convert it to a Netpbm .pgm 
         file, and then reading in the data from the 16-bit pgm file. 
         
@@ -48,15 +48,23 @@ def read_raw(filename):
     if not os.path.exists(filename):
         raise IOError("File {} does not exist!".format(filename))
     
-    # Converting the raw to PGM
-    p = subprocess.Popen(["dcraw","-D","-4",filename]).communicate()[0]
-    
-    pgm_filename = os.path.splitext(filename)[0] + ".pgm"
-    raw_data = read_pgm(pgm_filename)
+    if interpolate:
+        # Converting the raw to PPM
+        p = subprocess.Popen(["dcraw","-q","1","-f","-v","-a",filename]).communicate()[0]
+        
+        ppm_filename = os.path.splitext(filename)[0] + ".ppm"
+        raw_data = np.array(Image.open(ppm_filename))
+        
+    else:
+        # Converting the raw to PGM
+        p = subprocess.Popen(["dcraw","-D","-4",filename]).communicate()[0]
+        
+        pgm_filename = os.path.splitext(filename)[0] + ".pgm"
+        raw_data = read_pgm(pgm_filename)
     
     return raw_data
 
-def raw_to_fits(raw_filename, fits_filename=None, split_channels=False):
+def raw_to_fits(raw_filename, fits_filename=None, split_channels=False, interpolate=True):
     """ Convert a raw image file (e.g. NEF or CR2) to a FITS file 
     
         .. Note:: Right now, this really only supports RGB cameras, like Nikon D40, D90 etc.
@@ -74,8 +82,11 @@ def raw_to_fits(raw_filename, fits_filename=None, split_channels=False):
             from the RAW image. Otherwise, it will return an HDUList with a single HDU
             with the same bayer pattern structure. The bayer pattern is read from the 
             EXIF data.
+        interpolate : bool, optional
+            If True, will interpolate the colors onto the same grid using dcraw's VNG
+            4-color interpolator.
     """
-    raw_data = read_raw(raw_filename)
+    raw_data = read_raw(raw_filename, interpolate=interpolate)
     
     # Getting the EXIF data with dcraw
     p = subprocess.Popen(["dcraw","-i","-v",raw_filename],stdout=subprocess.PIPE)
@@ -137,7 +148,13 @@ def raw_to_fits(raw_filename, fits_filename=None, split_channels=False):
         hdu.header.add_comment('FOCAL is in mm')
     
     # Split each filter into its own HDU
-    if split_channels:
+    
+    if interpolate:
+        prim_hdu = pf.PrimaryHDU(raw_data)
+        _update_header(prim_hdu)
+        hdulist = pf.HDUList(hdus=[prim_hdu])
+        
+    elif split_channels:
         split_map = np.array([[(0,0),(0,1)],[(1,0),(1,1)]])
         
         a,b = split_map[bayer_pattern == "R"][0]
@@ -180,7 +197,7 @@ def raw_to_fits(raw_filename, fits_filename=None, split_channels=False):
         return hdulist
 
 if __name__ == '__main__':
-    parser = ArgumentParser(description="Don't coadd your images!!")
+    parser = ArgumentParser(description="")
     parser.add_argument("-v", "--verbose", action="store_true", dest="verbose", default=False,
                     help="Be chatty (default = False)")
     parser.add_argument("--test", action="store_true", dest="test", default=False,
